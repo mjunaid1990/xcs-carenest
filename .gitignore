@@ -1,0 +1,28 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Database (local development file database)
+prisma/*.db
+prisma/*.db-journal
+prisma/dev.db*
+
+# Uploaded files (local storage driver)
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# Misc
+.DS_Store
+*.log
+next-env.d.ts
+.vercel
+tsconfig.tsbuildinfo

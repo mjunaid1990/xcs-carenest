@@ -1,0 +1,933 @@
+// CareNest — Prisma schema
+// ---------------------------------------------------------------------------
+// The datasource uses SQLite for zero-setup local development. Production
+// runs PostgreSQL: `npm run db:use-postgres` rewrites this datasource block
+// (and the README documents the migration flow). To stay portable between the
+// two engines this schema:
+//   * stores "enums" as String columns validated by Zod + TS unions,
+//   * stores JSON blobs as String columns parsed in lib/json.ts,
+//   * stores all money as integer minor units (cents).
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------- Identity ----------------------------------
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String
+  firstName       String
+  lastName        String
+  role            String    @default("FAMILY") // FAMILY | CAREGIVER | AGENCY | ADMIN
+  status          String    @default("ACTIVE") // ACTIVE | SUSPENDED | DEACTIVATED
+  phone           String?
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  avatarUrl       String?
+  city            String?
+  state           String?
+  zip             String?
+  country         String    @default("US")
+  timezone        String    @default("America/New_York")
+  lastLoginAt     DateTime?
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  familyProfile       FamilyProfile?
+  caregiverProfile    CaregiverProfile?
+  agencyProfile       AgencyProfile?
+  sessions            Session[]
+  verificationTokens  VerificationToken[]
+  notifications       Notification[]
+  notificationPrefs   NotificationPreference?
+  documents           UploadedDocument[]
+  verificationReqs    VerificationRequest[]      @relation("VerificationSubject")
+  reviewedVerifications VerificationRequest[]    @relation("VerificationReviewer")
+  conversations       ConversationParticipant[]
+  messages            Message[]
+  reviewsWritten      Review[]
+  reportsFiled        Report[]                   @relation("ReportReporter")
+  reportsHandled      Report[]                   @relation("ReportHandler")
+  blocked             BlockedUser[]              @relation("Blocker")
+  blockedBy           BlockedUser[]              @relation("Blocked")
+  auditLogs           AdminAuditLog[]
+  subscriptions       Subscription[]
+  payments            Payment[]
+  invoices            Invoice[]
+  savedCaregivers     SavedCaregiver[]
+  savedJobs           SavedJob[]
+  interviewsAsFamily  Interview[]                @relation("InterviewFamily")
+  interviewsAsCaregiver Interview[]              @relation("InterviewCaregiver")
+  interviewsCreated   Interview[]                @relation("InterviewCreator")
+  ownedJobs           CareJob[]                  @relation("JobOwner")
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@index([city, state])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ip        String?
+  userAgent String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  type      String // EMAIL_VERIFY | PASSWORD_RESET | PHONE_OTP
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, type])
+}
+
+// Legacy-style explicit role table (required by the brief) — kept in sync with
+// User.role by lib/rbac.ts constants and used for admin permission reporting.
+model UserRole {
+  id           String   @id @default(cuid())
+  userId       String
+  role         String
+  grantedAt    DateTime @default(now())
+  grantedById  String?
+
+  @@unique([userId, role])
+  @@index([role])
+}
+
+// ------------------------------- Profiles ----------------------------------
+
+model FamilyProfile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline          String?
+  about             String?
+  childrenCount     Int      @default(0)
+  childrenAges      String? // csv
+  careNeeds         String? // csv of category slugs
+  addressLine       String?
+  city              String
+  state             String
+  zip               String
+  latitude          Float?
+  longitude         Float?
+  emergencyContact  String?
+  onboardingComplete Boolean @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([city, state])
+}
+
+model AgencyProfile {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug               String    @unique
+  name               String
+  about              String?
+  logoUrl            String?
+  website            String?
+  contactPhone       String?
+  contactEmail       String?
+  addressLine        String?
+  city               String
+  state              String
+  zip                String
+  latitude           Float?
+  longitude          Float?
+  licenseNumber      String?
+  licenseVerifiedAt  DateTime?
+  ratingAvg          Float     @default(0)
+  ratingCount        Int       @default(0)
+  status             String    @default("PENDING") // PENDING | VERIFIED | SUSPENDED
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  caregivers         CaregiverProfile[]
+  jobs               CareJob[]          @relation("JobAgency")
+
+  @@index([city, state])
+  @@index([status])
+}
+
+model CaregiverProfile {
+  id                     String    @id @default(cuid())
+  userId                 String    @unique
+  user                   User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slug                   String    @unique
+  headline               String?
+  bio                    String?
+  photoUrl               String?
+  coverUrl               String?
+  city                   String
+  state                  String
+  zip                    String?
+  latitude               Float?
+  longitude              Float?
+  country                String    @default("US")
+
+  yearsExperience        Int       @default(0)
+  hourlyRateCents        Int?
+  dailyRateCents         Int?
+  monthlyRateCents       Int?
+  rateType               String    @default("HOURLY") // HOURLY | DAILY | MONTHLY
+  employmentType         String    @default("BOTH") // FULL_TIME | PART_TIME | BOTH
+  livingArrangement      String    @default("BOTH") // LIVE_IN | LIVE_OUT | BOTH
+  availableFrom          DateTime?
+  minHoursPerWeek        Int?
+  maxHoursPerWeek        Int?
+  willingToTravel        Boolean   @default(false)
+  travelRadiusKm         Int       @default(25)
+  languages              String? // csv
+  specialNeeds           String? // csv
+
+  isPublished            Boolean   @default(false)
+  isFeatured             Boolean   @default(false)
+  featuredUntil          DateTime?
+  availableForWork       Boolean   @default(true)
+  profileViews           Int       @default(0)
+  completedHires         Int       @default(0)
+  ratingAvg              Float     @default(0)
+  ratingCount            Int       @default(0)
+  responseRate           Int       @default(0)
+
+  identityVerifiedAt     DateTime?
+  backgroundCheckAt      DateTime?
+  qualificationsVerifiedAt DateTime?
+  referencesVerifiedAt   DateTime?
+  verificationStatus     String    @default("UNVERIFIED") // UNVERIFIED | PENDING | VERIFIED | REJECTED
+  verificationNote       String?
+
+  agencyId               String?
+  agency                 AgencyProfile? @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+
+  deletedAt              DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  categories             CaregiverCategory[]
+  skills                 CaregiverSkill[]
+  certifications         CaregiverCertification[]
+  experiences            CaregiverExperience[]
+  availability           CaregiverAvailability[]
+  applications           JobApplication[]
+  savedBy                SavedCaregiver[]
+  reviews                Review[]
+  profileViewsLog        ProfileView[]
+
+  @@index([city, state])
+  @@index([isPublished, availableForWork])
+  @@index([verificationStatus])
+  @@index([hourlyRateCents])
+  @@index([ratingAvg])
+  @@index([agencyId])
+}
+
+// ------------------------------ Taxonomy -----------------------------------
+
+model CareCategory {
+  id             String   @id @default(cuid())
+  slug           String   @unique
+  name           String
+  singular       String
+  shortName      String?
+  description    String
+  longDescription String?
+  heroImageUrl   String?
+  icon           String   @default("Heart")
+  accent         String   @default("teal")
+  seoTitle       String?
+  seoDescription String?
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  isCareType     Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  caregivers     CaregiverCategory[]
+  jobs           CareJob[]
+
+  @@index([isActive, sortOrder])
+}
+
+model CaregiverCategory {
+  id          String   @id @default(cuid())
+  caregiverId String
+  categoryId  String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  category    CareCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([caregiverId, categoryId])
+  @@index([categoryId])
+}
+
+model CaregiverSkill {
+  id          String  @id @default(cuid())
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  name        String
+  level       String? // BEGINNER | INTERMEDIATE | EXPERT
+  years       Int?
+  createdAt   DateTime @default(now())
+
+  @@unique([caregiverId, name])
+  @@index([name])
+}
+
+model CaregiverCertification {
+  id          String    @id @default(cuid())
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  name        String
+  issuer      String?
+  issuedAt    DateTime?
+  expiresAt   DateTime?
+  documentUrl String?
+  documentId  String?
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([caregiverId])
+}
+
+model CaregiverExperience {
+  id          String    @id @default(cuid())
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  employer    String
+  title       String
+  startDate   DateTime
+  endDate     DateTime?
+  isCurrent   Boolean   @default(false)
+  description String?
+  createdAt   DateTime  @default(now())
+
+  @@index([caregiverId])
+}
+
+model CaregiverAvailability {
+  id          String  @id @default(cuid())
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int // 0 = Sunday .. 6 = Saturday
+  startMinute Int // minutes from midnight, local to caregiver
+  endMinute   Int
+
+  @@index([caregiverId, dayOfWeek])
+}
+
+model Location {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  city         String
+  state        String
+  stateCode    String
+  country      String   @default("US")
+  latitude     Float?
+  longitude    Float?
+  description  String?
+  isActive     Boolean  @default(true)
+  isFeatured   Boolean  @default(false)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([isActive, isFeatured])
+  @@index([stateCode])
+}
+
+// --------------------------------- Jobs ------------------------------------
+
+model CareJob {
+  id                 String    @id @default(cuid())
+  slug               String    @unique
+  ownerId            String // family user id (or agency owner)
+  owner              User      @relation("JobOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  agencyId           String?
+  agency             AgencyProfile? @relation("JobAgency", fields: [agencyId], references: [id], onDelete: SetNull)
+  categoryId         String
+  category           CareCategory @relation(fields: [categoryId], references: [id])
+  title              String
+  description        String
+  requirementsText   String?
+  city               String
+  state              String
+  zip                String?
+  latitude           Float?
+  longitude          Float?
+  employmentType     String   @default("FULL_TIME") // FULL_TIME | PART_TIME | OCCASIONAL
+  livingArrangement  String   @default("LIVE_OUT") // LIVE_IN | LIVE_OUT
+  schedule           String
+  startDate          DateTime?
+  durationMonths     Int?
+  budgetType         String   @default("HOURLY") // HOURLY | DAILY | MONTHLY
+  budgetMinCents     Int
+  budgetMaxCents     Int?
+  caregiversNeeded   Int      @default(1)
+  experienceYears    Int      @default(0)
+  languages          String?
+  certifications     String?
+  status             String   @default("DRAFT") // DRAFT | PUBLISHED | PAUSED | FILLED | CLOSED | COMPLETED
+  publishedAt        DateTime?
+  expiresAt          DateTime?
+  filledAt           DateTime?
+  viewCount          Int      @default(0)
+  applicationCount   Int      @default(0)
+  isFeatured         Boolean  @default(false)
+  deletedAt          DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  requirements   JobRequirement[]
+  applications   JobApplication[]
+  savedBy        SavedJob[]
+  interviews     Interview[]
+  reviews        Review[]
+  conversations  Conversation[]
+
+  @@index([status, createdAt])
+  @@index([categoryId, status])
+  @@index([city, state])
+  @@index([ownerId])
+  @@index([budgetMinCents])
+}
+
+model JobRequirement {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       CareJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  label     String
+  isRequired Boolean @default(true)
+  sortOrder Int      @default(0)
+
+  @@index([jobId])
+}
+
+model JobApplication {
+  id           String   @id @default(cuid())
+  jobId        String
+  job          CareJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  caregiverId  String
+  caregiver    CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  message      String
+  expectedRateCents Int?
+  availableFrom DateTime?
+  status       String   @default("SUBMITTED") // SUBMITTED | REVIEWING | SHORTLISTED | INTERVIEW | HIRED | REJECTED | WITHDRAWN
+  matchScore   Int      @default(0)
+  shortlistedAt DateTime?
+  hiredAt      DateTime?
+  rejectedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  interviews Interview[]
+  reviews    Review[]
+
+  @@unique([jobId, caregiverId])
+  @@index([caregiverId, status])
+  @@index([jobId, status])
+  @@index([createdAt])
+}
+
+model SavedCaregiver {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, caregiverId])
+  @@index([caregiverId])
+}
+
+model SavedJob {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId     String
+  job       CareJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, jobId])
+  @@index([jobId])
+}
+
+// ------------------------------ Messaging ----------------------------------
+
+model Conversation {
+  id                 String   @id @default(cuid())
+  subject            String?
+  type               String   @default("DIRECT") // DIRECT | JOB | AGENCY | SUPPORT
+  jobId              String?
+  job                CareJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  lastMessageAt      DateTime @default(now())
+  lastMessagePreview String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([lastMessageAt])
+  @@index([jobId])
+}
+
+model ConversationParticipant {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime?
+  isArchived     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId, isArchived])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  body           String
+  attachmentUrl  String?
+  attachmentName String?
+  attachmentMime String?
+  attachmentSize Int?
+  readAt         DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}
+
+model BlockedUser {
+  id        String   @id @default(cuid())
+  blockerId String
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+// ---------------------------- Interviews -----------------------------------
+
+model Interview {
+  id               String   @id @default(cuid())
+  jobId            String?
+  job              CareJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  applicationId    String?
+  application      JobApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  familyId         String
+  family           User     @relation("InterviewFamily", fields: [familyId], references: [id], onDelete: Cascade)
+  caregiverId      String
+  caregiver        User     @relation("InterviewCaregiver", fields: [caregiverId], references: [id], onDelete: Cascade)
+  createdById      String
+  createdBy        User     @relation("InterviewCreator", fields: [createdById], references: [id])
+  type             String   @default("ONLINE") // ONLINE | PHONE | IN_PERSON
+  scheduledAt      DateTime
+  durationMinutes  Int      @default(30)
+  timezone         String   @default("America/New_York")
+  location         String?
+  meetingLink      String?
+  notes            String?
+  status           String   @default("PROPOSED") // PROPOSED | ACCEPTED | DECLINED | RESCHEDULED | COMPLETED | CANCELLED
+  declineReason    String?
+  reminderSentAt   DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([familyId, scheduledAt])
+  @@index([caregiverId, scheduledAt])
+  @@index([status])
+}
+
+model Booking {
+  id          String    @id @default(cuid())
+  interviewId String?   @unique
+  interview   Interview? @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  familyId    String
+  caregiverId String
+  startAt     DateTime
+  endAt       DateTime
+  status      String    @default("SCHEDULED") // SCHEDULED | CANCELLED | COMPLETED | NO_SHOW
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  @@index([caregiverId, startAt])
+  @@index([familyId, startAt])
+}
+
+// ------------------------------ Reviews ------------------------------------
+
+model Review {
+  id            String   @id @default(cuid())
+  authorId      String
+  author        User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  caregiverId   String?
+  caregiver     CaregiverProfile? @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  jobId         String?
+  job           CareJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  applicationId String?
+  application   JobApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  rating        Int
+  title         String?
+  body          String
+  isVerified    Boolean  @default(false)
+  status        String   @default("PENDING") // PENDING | PUBLISHED | HIDDEN | REMOVED
+  responseBody  String?
+  respondedAt   DateTime?
+  moderatedById String?
+  moderationNote String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([authorId, applicationId])
+  @@index([caregiverId, status])
+  @@index([status, createdAt])
+}
+
+// --------------------------- Trust & Safety --------------------------------
+
+model VerificationRequest {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation("VerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
+  type         String // IDENTITY | BACKGROUND_CHECK | QUALIFICATION | AGENCY_LICENSE | REFERENCE | PHONE
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED | INFO_REQUESTED
+  provider     String?   @default("MANUAL") // MANUAL | STRIPE_IDENTITY | CHECKR | PERSONA
+  providerRef  String?
+  submittedData String? // JSON text: structured answers + document ids
+  documentId   String?
+  document     UploadedDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  reviewerId   String?
+  reviewer     User?     @relation("VerificationReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  reviewNote   String?
+  decidedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId, type])
+}
+
+model UploadedDocument {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind        String // AVATAR | CERTIFICATE | ID_DOCUMENT | BACKGROUND_REPORT | JOB_ATTACHMENT | MESSAGE_ATTACHMENT | AGENCY_LICENSE
+  fileName    String
+  storageKey  String
+  url         String?
+  mimeType    String
+  sizeBytes   Int
+  isPublic    Boolean   @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  verificationRequests VerificationRequest[]
+
+  @@index([userId, kind])
+}
+
+model Report {
+  id              String   @id @default(cuid())
+  reporterId      String
+  reporter        User     @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetType      String // USER | JOB | REVIEW | MESSAGE | CONVERSATION
+  targetUserId    String?
+  targetJobId     String?
+  targetReviewId  String?
+  reason          String
+  details         String?
+  status          String   @default("OPEN") // OPEN | UNDER_REVIEW | RESOLVED | DISMISSED
+  resolutionNote  String?
+  handledById     String?
+  handledBy       User?    @relation("ReportHandler", fields: [handledById], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([targetType])
+}
+
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ---------------------------- Monetization ---------------------------------
+
+model SubscriptionPlan {
+  id                  String   @id @default(cuid())
+  slug                String   @unique
+  name                String
+  audience            String // FAMILY | CAREGIVER | AGENCY
+  tagline             String?
+  description         String?
+  priceMonthlyCents   Int      @default(0)
+  priceAnnualCents    Int      @default(0)
+  currency            String   @default("usd")
+  features            String   @default("[]") // JSON array of strings
+  searchLimit         Int? // null = unlimited
+  applicationLimit    Int?
+  contactLimit        Int?
+  jobPostLimit        Int?
+  trialDays           Int      @default(0)
+  stripePriceMonthlyId String?
+  stripePriceAnnualId  String?
+  isActive            Boolean  @default(true)
+  isPopular           Boolean  @default(false)
+  sortOrder           Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([audience, isActive, sortOrder])
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId               String
+  plan                 SubscriptionPlan @relation(fields: [planId], references: [id])
+  status               String    @default("ACTIVE") // TRIALING | ACTIVE | PAST_DUE | CANCELED | EXPIRED
+  interval             String    @default("MONTHLY") // MONTHLY | ANNUAL
+  currentPeriodStart   DateTime  @default(now())
+  currentPeriodEnd     DateTime
+  cancelAtPeriodEnd    Boolean   @default(false)
+  canceledAt           DateTime?
+  endedAt              DateTime?
+  stripeCustomerId     String?
+  stripeSubscriptionId String?   @unique
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  payments Payment[]
+  invoices Invoice[]
+
+  @@index([userId])
+  @@index([status, currentPeriodEnd])
+}
+
+model Payment {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionId    String?
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  invoiceId         String?
+  invoice           Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  amountCents       Int
+  currency          String   @default("usd")
+  status            String   @default("PENDING") // PENDING | SUCCEEDED | FAILED | REFUNDED
+  provider          String   @default("SANDBOX") // STRIPE | SANDBOX | MANUAL
+  providerPaymentId String?
+  description       String?
+  failureReason     String?
+  createdAt         DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status])
+}
+
+model Invoice {
+  id             String   @id @default(cuid())
+  number         String   @unique
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  amountCents    Int
+  currency       String   @default("usd")
+  status         String   @default("OPEN") // DRAFT | OPEN | PAID | VOID | UNCOLLECTIBLE
+  lineItems      String   @default("[]") // JSON array {description, amountCents, quantity}
+  issuedAt       DateTime @default(now())
+  dueAt          DateTime?
+  paidAt         DateTime?
+  pdfUrl         String?
+  createdAt      DateTime @default(now())
+
+  payments Payment[]
+
+  @@index([userId, createdAt])
+}
+
+// --------------------------- Notifications ---------------------------------
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String?
+  link      String?
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  emailedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, isRead, createdAt])
+}
+
+model NotificationPreference {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailApplications  Boolean  @default(true)
+  emailMessages      Boolean  @default(true)
+  emailInterviews    Boolean  @default(true)
+  emailBilling       Boolean  @default(true)
+  emailReviews       Boolean  @default(true)
+  emailMarketing     Boolean  @default(false)
+  inAppEnabled       Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+}
+
+model ProfileView {
+  id          String   @id @default(cuid())
+  caregiverId String
+  caregiver   CaregiverProfile @relation(fields: [caregiverId], references: [id], onDelete: Cascade)
+  viewerId    String?
+  createdAt   DateTime @default(now())
+
+  @@index([caregiverId, createdAt])
+}
+
+// ------------------------------- Content -----------------------------------
+
+model BlogPost {
+  id             String    @id @default(cuid())
+  slug           String    @unique
+  title          String
+  excerpt        String
+  content        String
+  coverImageUrl  String?
+  authorName     String
+  category       String?
+  tags           String? // csv
+  status         String    @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  featured       Boolean   @default(false)
+  publishedAt    DateTime?
+  seoTitle       String?
+  seoDescription String?
+  viewCount      Int       @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, publishedAt])
+}
+
+model CMSPage {
+  id             String   @id @default(cuid())
+  slug           String   @unique
+  title          String
+  subtitle       String?
+  content        String // markdown, admin-authored only
+  status         String   @default("PUBLISHED") // DRAFT | PUBLISHED
+  seoTitle       String?
+  seoDescription String?
+  showInFooter   Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+}
+
+model Faq {
+  id        String  @id @default(cuid())
+  question  String
+  answer    String
+  category  String  @default("general")
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category, isActive, sortOrder])
+}
+
+model Testimonial {
+  id         String  @id @default(cuid())
+  authorName String
+  authorRole String?
+  quote      String
+  avatarUrl  String?
+  rating     Int     @default(5)
+  isActive   Boolean @default(true)
+  sortOrder  Int     @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([isActive, sortOrder])
+}
+
+model PlatformSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  group     String   @default("general")
+  label     String?
+  type      String   @default("text") // text | number | boolean | json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([group])
+}
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  subject   String
+  body      String
+  isActive  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}

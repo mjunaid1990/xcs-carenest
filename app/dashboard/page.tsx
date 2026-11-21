@@ -1,0 +1,10 @@
+import { redirect } from "next/navigation";
+import { requireUser } from "@/lib/auth";
+import { ROLE_HOME } from "@/lib/rbac";
+
+export const dynamic = "force-dynamic";
+
+export default async function DashboardIndex() {
+  const user = await requireUser();
+  redirect(ROLE_HOME[user.role]);
+}
