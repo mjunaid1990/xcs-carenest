@@ -20,6 +20,9 @@ prisma/dev.db*
 storage/uploads/*
 !storage/uploads/.gitkeep
 
+# Generated at build time by scripts/vercel-build.mjs
+prisma/schema.build.prisma
+
 # Misc
 .DS_Store
 *.log

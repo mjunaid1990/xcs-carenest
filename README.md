@@ -259,11 +259,7 @@ Realtime (SSE) needs a platform that allows long-lived HTTP responses, or the Re
 
 The app is a standard Next.js App Router project, so Vercel only needs environment variables and a hosted database:
 
-1. **Database:** Vercel's filesystem is ephemeral, so the local SQLite file cannot be used. Create a hosted Postgres (Neon, Supabase, Vercel Postgres) and point the schema at it:
-   ```bash
-   npm run db:use-postgres   # rewrites prisma/schema.prisma + .env
-   ```
-   You do not have to run migrations or the seed by hand — the Vercel build does both (see step 4).
+1. **Database:** Vercel's filesystem is ephemeral, so the local SQLite file cannot be used. Create a hosted Postgres (Neon, Supabase, Vercel Postgres) and set `DATABASE_URL` (plus `DIRECT_URL` when the provider gives you a pooled connection string). Nothing else to do: the build detects a Postgres URL and generates a Postgres-provider schema for generate/push/seed, so your local SQLite setup stays untouched. `npm run db:use-postgres` is only needed if you want to develop against Postgres locally.
 2. **Uploads:** set `UPLOAD_DRIVER=cloudinary` plus `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. The local driver writes into `storage/uploads`, which is not writable/persistent on Vercel.
 3. **Environment variables** (Project → Settings → Environment Variables): `DATABASE_URL`, `AUTH_SECRET`, `NEXT_PUBLIC_APP_URL` (the deployed URL), `EMAIL_FROM` and the email/Stripe keys you use. The full list is in `.env.example`.
 4. **Build command:** `vercel.json` sets it to `npm run vercel-build`, which runs, in order:
