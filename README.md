@@ -259,15 +259,18 @@ Realtime (SSE) needs a platform that allows long-lived HTTP responses, or the Re
 
 The app is a standard Next.js App Router project, so Vercel only needs environment variables and a hosted database:
 
-1. **Database:** Vercel's filesystem is ephemeral, so the local SQLite file cannot be used. Create a hosted Postgres (Neon, Supabase, Vercel Postgres), then run locally against it:
+1. **Database:** Vercel's filesystem is ephemeral, so the local SQLite file cannot be used. Create a hosted Postgres (Neon, Supabase, Vercel Postgres) and point the schema at it:
    ```bash
    npm run db:use-postgres   # rewrites prisma/schema.prisma + .env
-   npx prisma migrate deploy # or: npx prisma db push
-   npm run db:seed           # optional demo data — never with real users
    ```
+   You do not have to run migrations or the seed by hand — the Vercel build does both (see step 4).
 2. **Uploads:** set `UPLOAD_DRIVER=cloudinary` plus `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. The local driver writes into `storage/uploads`, which is not writable/persistent on Vercel.
 3. **Environment variables** (Project → Settings → Environment Variables): `DATABASE_URL`, `AUTH_SECRET`, `NEXT_PUBLIC_APP_URL` (the deployed URL), `EMAIL_FROM` and the email/Stripe keys you use. The full list is in `.env.example`.
-4. **Build command** stays `npm run build` (`prisma generate && next build`); the Prisma client is generated at build time, so `prisma generate` must stay in the script.
+4. **Build command:** `vercel.json` sets it to `npm run vercel-build`, which runs, in order:
+   ```text
+   prisma generate  ->  prisma migrate deploy (or prisma db push when there is no prisma/migrations)  ->  prisma/seed.ts  ->  next build
+   ```
+   So every deploy brings the database up to date and seeds it before the app is built. Set `SEED_ON_BUILD=false` in Vercel once the production database holds real users. `npm run build` (generate + build only) is still there for local use and CI without a database.
 5. **Realtime:** SSE works on Vercel's Node runtime. Set `NEXT_RUNTIME=nodejs` behaviour by keeping the API routes on the Node runtime (they already are), and if you scale to many instances, switch the in-process bus for Redis as described in `docs/DEPLOYMENT.md`.
 6. **Stripe webhook:** point it at `https://YOUR_DOMAIN/api/stripe/webhook` and copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
 
